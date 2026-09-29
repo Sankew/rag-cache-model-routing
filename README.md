@@ -1,6 +1,8 @@
 # Permission-scoped RAG cache and model routing
 
-This standalone project extends a small retrieval-augmented generation (RAG) service with answer caching and an auditable model router. It runs offline with synthetic documents. The demo uses one deterministic extractive generator for both routes, so it tests plumbing and accounting rather than model quality.
+[![Checks](https://github.com/Sankew/rag-cache-model-routing/actions/workflows/checks.yml/badge.svg)](https://github.com/Sankew/rag-cache-model-routing/actions/workflows/checks.yml)
+
+This project adds answer caching and an auditable model router to a small retrieval-augmented generation (RAG) service. It runs offline with synthetic documents. The demo uses one deterministic extractive generator for both routes, so it tests plumbing and accounting rather than model quality.
 
 ```mermaid
 flowchart LR
@@ -36,7 +38,7 @@ The evaluation script compares a baseline that always uses the strong model ID w
 
 On this 100-request synthetic workload, the optimized path served **50 exact cache hits** and **zero near-miss cache hits**. All 24 near-miss questions produced a different source sentence from their paired standard-value question. The baseline and optimized paths agreed on all 100 answers. Routing decisions were 45 single-document fact calls, four complex-question calls, one multi-document call, and 50 cache hits. The multi-document case verifies routing only; the extractive demo generator does not synthesize an answer across documents.
 
-Using the script's **illustrative prices and estimated token counts**, generation cost was `$0.01713` for the baseline and `$0.00251` for the optimized path in the current deterministic workload. Both model IDs run the same extractive generator, so this is an accounting demonstration, not measured model savings or quality. Local p50/p95 latency is printed on each run; the cache can be slower in this tiny in-memory demo because retrieval, authorization, and cache lookup still run. These numbers are not provider billing or CV-ready performance claims.
+Using the script's **illustrative prices and estimated token counts**, generation cost was `$0.01713` for the baseline and `$0.00251` for the optimized path in the current deterministic workload. Both model IDs run the same extractive generator, so this is an accounting demonstration, not measured model savings or quality. Local p50/p95 latency is printed on each run; the cache can be slower in this tiny in-memory demo because retrieval, authorization, and cache lookup still run.
 
 ## What to measure next
 

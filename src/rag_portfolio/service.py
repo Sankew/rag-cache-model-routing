@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from time import perf_counter
+from typing import Any
 
 from .access import ACLStore, can_read, payload_prefilter, secure_retrieve
 from .baseline import Embedder, Generator, MemoryIndex
@@ -53,7 +54,7 @@ class SecureRAGService:
         chunks = secure_retrieve(principal, (row.chunk for row in ranked), self.acl_store, limit=self.top_k)
         score_by_id = {row.chunk.chunk_id: row.score for row in ranked}
         evidence = [ScoredChunk(chunk, score_by_id[chunk.chunk_id]) for chunk in chunks]
-        cache_args = dict(
+        cache_args: dict[str, Any] = dict(
             corpus_revision="demo-v1", index_revision=str(self.index.revision),
             pipeline_revision="cache-router-v1", embedding=vector,
         )
