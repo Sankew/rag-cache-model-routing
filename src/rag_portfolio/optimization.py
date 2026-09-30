@@ -10,9 +10,10 @@ from dataclasses import dataclass
 from math import ceil, floor, sqrt
 import re
 from time import monotonic
-from typing import Callable, Protocol, Sequence
+from typing import Any, Callable, Sequence
 
 from .access import ACLStore, can_read
+from .domain import Answer, Chunk, Principal
 
 
 def percentile(values: Sequence[float], q: float) -> float:
@@ -27,32 +28,10 @@ def percentile(values: Sequence[float], q: float) -> float:
     return ordered[low] * (high - rank) + ordered[high] * (rank - low)
 
 
-class PrincipalLike(Protocol):
-    user_id: str
-    tenant_id: str
-    roles: frozenset[str]
-    clearance: int
+AccessCheck = Callable[[Principal, Chunk], bool]
 
 
-class ChunkLike(Protocol):
-    chunk_id: str
-    document_id: str
-    version: int
-    acl: object
-
-
-class AnswerLike(Protocol):
-    text: str
-    citations: tuple[object, ...]
-    model_id: str
-    input_tokens: int
-    output_tokens: int
-
-
-AccessCheck = Callable[[PrincipalLike, ChunkLike], bool]
-
-
-def default_access_check(principal: PrincipalLike, chunk: ChunkLike) -> bool:
+def default_access_check(principal: Principal, chunk: Chunk) -> bool:
     """Use the project's tenant, role/user, and classification ACL semantics."""
     return can_read(principal, chunk.acl)
 
@@ -85,7 +64,7 @@ class CacheScope:
 
 @dataclass(frozen=True)
 class CacheHit:
-    answer: AnswerLike
+    answer: Answer
     match_type: str
     similarity: float
 
@@ -95,7 +74,7 @@ class _Entry:
     scope: CacheScope
     question: str
     embedding: tuple[float, ...] | None
-    answer: AnswerLike
+    answer: Answer
     expires_at: float
 
 
@@ -130,8 +109,8 @@ class AnswerCache:
 
     def scope(
         self,
-        principal: PrincipalLike,
-        chunks: Sequence[ChunkLike],
+        principal: Principal,
+        chunks: Sequence[Chunk],
         *,
         corpus_revision: str,
         index_revision: str,
@@ -159,13 +138,13 @@ class AnswerCache:
             evidence,
         )
 
-    def _acl_revision(self, chunk: ChunkLike) -> int:
+    def _acl_revision(self, chunk: Chunk) -> int:
         if self.acl_store is None:
             return chunk.acl.revision
         current = self.acl_store.get(chunk.document_id)
         return current.revision if current is not None else -1
 
-    def _authorized(self, principal: PrincipalLike, chunk: ChunkLike) -> bool:
+    def _authorized(self, principal: Principal, chunk: Chunk) -> bool:
         if not self.access_check(principal, chunk):
             return False
         if self.acl_store is None:
@@ -173,7 +152,7 @@ class AnswerCache:
         current = self.acl_store.get(chunk.document_id)
         return current is not None and can_read(principal, current)
 
-    def _safe(self, principal: PrincipalLike, chunks: Sequence[ChunkLike], answer: AnswerLike) -> bool:
+    def _safe(self, principal: Principal, chunks: Sequence[Chunk], answer: Answer) -> bool:
         current = {(chunk.document_id, chunk.chunk_id, chunk.version): chunk for chunk in chunks}
         for citation in answer.citations:
             chunk = current.get((citation.document_id, citation.chunk_id, citation.version))
@@ -183,10 +162,10 @@ class AnswerCache:
 
     def put(
         self,
-        principal: PrincipalLike,
-        chunks: Sequence[ChunkLike],
+        principal: Principal,
+        chunks: Sequence[Chunk],
         question: str,
-        answer: AnswerLike,
+        answer: Answer,
         *,
         corpus_revision: str,
         index_revision: str,
@@ -209,8 +188,8 @@ class AnswerCache:
 
     def get(
         self,
-        principal: PrincipalLike,
-        chunks: Sequence[ChunkLike],
+        principal: Principal,
+        chunks: Sequence[Chunk],
         question: str,
         *,
         corpus_revision: str,
@@ -240,18 +219,18 @@ class AnswerCache:
             return CacheHit(ranked[0][1].answer, "semantic", ranked[0][0])
         return None
 
-    def clear(self) -> None:
-        self._entries.clear()
-
     def _evict_expired(self) -> None:
         now = self.clock()
         self._entries = [entry for entry in self._entries if entry.expires_at > now]
 
 
+THRESHOLD_CANDIDATES = tuple(round(0.85 + i * 0.01, 2) for i in range(13))
+
+
 def calibrate_semantic_threshold(
     paraphrase_similarities: Sequence[float],
     near_miss_similarities: Sequence[float],
-    candidates: Sequence[float] = tuple(round(0.85 + i * 0.01, 2) for i in range(13)),
+    candidates: Sequence[float] = THRESHOLD_CANDIDATES,
 ) -> tuple[float, float]:
     """Choose the lowest candidate with zero false hits; report paraphrase recall."""
     if not paraphrase_similarities or not near_miss_similarities:
@@ -280,7 +259,7 @@ class ModelRouter:
         self.cheap_model = cheap_model
         self.strong_model = strong_model
 
-    def route(self, question: str, chunks: Sequence[ChunkLike]) -> RouteDecision:
+    def route(self, question: str, chunks: Sequence[Chunk]) -> RouteDecision:
         if not chunks:
             return RouteDecision(self.strong_model, "no_evidence")
         if len({chunk.document_id for chunk in chunks}) > 1:
@@ -308,7 +287,7 @@ class OptimizationMetrics:
             raise ValueError("Provide a pricing snapshot date")
         self.prices = dict(prices)
         self.price_date = price_date
-        self.events: list[dict[str, object]] = []
+        self.events: list[dict[str, Any]] = []
 
     def record(
         self,
@@ -348,7 +327,7 @@ class OptimizationMetrics:
     def summary(self) -> dict[str, object]:
         count = len(self.events)
         if not count:
-            return {"requests": 0, "cache_hit_rate": 0.0, "total_cost": 0.0, "cost_per_request": 0.0, "p50_latency_ms": 0.0, "p95_latency_ms": 0.0, "price_date": self.price_date}
+            return {"requests": 0, "cache_hit_rate": 0.0, "total_cost": 0.0, "p50_latency_ms": 0.0, "p95_latency_ms": 0.0, "price_date": self.price_date}
         latencies = sorted(float(event["latency_ms"]) for event in self.events)
         total_cost = sum(float(event["cost"]) for event in self.events)
         hits = sum(event["cache_status"] != "miss" for event in self.events)
@@ -356,7 +335,6 @@ class OptimizationMetrics:
             "requests": count,
             "cache_hit_rate": hits / count,
             "total_cost": total_cost,
-            "cost_per_request": total_cost / count,
             "p50_latency_ms": percentile(latencies, 0.5),
             "p95_latency_ms": percentile(latencies, 0.95),
             "price_date": self.price_date,
